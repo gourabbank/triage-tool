@@ -48,3 +48,20 @@ class RequestOut(BaseModel):
     created_at: datetime
     status: str
     brief: Optional[BriefOut] = None
+    owner: Optional[str] = None
+    priority: Optional[str] = None
+    notes: Optional[str] = None
+    
+class TriageUpdate(BaseModel):
+    status: Optional[str] = None
+    owner: Optional[str] = None
+    priority: Optional[str] = None
+    notes: Optional[str] = None
+
+class AuditEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    field: str
+    old_value: Optional[str]
+    new_value: Optional[str]
+    created_at: datetime

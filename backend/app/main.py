@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from . import models, schemas
 from .database import Base, engine, get_db
+from fastapi import FastAPI, Depends, HTTPException
 
 Base.metadata.create_all(bind=engine)
 
@@ -35,6 +36,9 @@ def _request_to_out(req: models.Request) -> schemas.RequestOut:
         submitted_by=req.submitted_by,
         created_at=req.created_at,
         status=req.status,
+        owner=req.owner,
+        priority=req.priority,
+        notes=req.notes,
         brief=brief_out,
     )
 
@@ -67,3 +71,38 @@ def list_requests(db: Session = Depends(get_db)):
 @app.get("/requests", response_model=list[schemas.RequestOut])
 def list_requests(db: Session = Depends(get_db)):
     return db.query(models.Request).all()
+
+from .schemas import TriageUpdate, AuditEntryOut
+
+@app.patch("/requests/{request_id}", response_model=schemas.RequestOut)
+def update_triage(request_id: str, payload: schemas.TriageUpdate, db: Session = Depends(get_db)):
+    req = db.query(models.Request).filter(models.Request.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+
+    for field, new_value in updates.items():
+        old_value = getattr(req, field)
+        if old_value != new_value:
+            db.add(models.AuditEntry(
+                request_id=req.id,
+                field=field,
+                old_value=str(old_value) if old_value is not None else None,
+                new_value=str(new_value) if new_value is not None else None,
+            ))
+            setattr(req, field, new_value)
+
+    db.commit()
+    db.refresh(req)
+    return _request_to_out(req)
+
+
+@app.get("/requests/{request_id}/audit", response_model=list[schemas.AuditEntryOut])
+def get_audit_log(request_id: str, db: Session = Depends(get_db)):
+    req = db.query(models.Request).filter(models.Request.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return db.query(models.AuditEntry).filter(models.AuditEntry.request_id == request_id).all()

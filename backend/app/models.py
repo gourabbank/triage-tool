@@ -17,6 +17,9 @@ class Request(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="new", nullable=False)
     brief = relationship("Brief", back_populates="request", uselist=False)
+    owner = Column(String, nullable=True)
+    priority = Column(String, default="medium", nullable=False)
+    notes = Column(Text, nullable=True)
     
 from datetime import datetime  # add this import if not already there
 
@@ -35,3 +38,13 @@ class Brief(Base):
     created_at = Column(DateTime, default=datetime.utcnow)   # ← added
 
     request = relationship("Request", back_populates="brief")
+
+class AuditEntry(Base):
+    __tablename__ = "audit_entries"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    request_id = Column(String, ForeignKey("requests.id"), nullable=False)
+    field = Column(String, nullable=False)
+    old_value = Column(String, nullable=True)
+    new_value = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
