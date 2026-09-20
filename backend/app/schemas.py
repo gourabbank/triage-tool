@@ -51,6 +51,7 @@ class RequestOut(BaseModel):
     owner: Optional[str] = None
     priority: Optional[str] = None
     notes: Optional[str] = None
+    duplicate_of: Optional[str] = None
     
 class TriageUpdate(BaseModel):
     status: Optional[str] = None

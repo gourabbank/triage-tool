@@ -1,14 +1,24 @@
-from fastapi import FastAPI, Depends
+import json
+from typing import List, Optional
+
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from . import models, schemas
 from .database import Base, engine, get_db
-from fastapi import FastAPI, Depends, HTTPException
+from .brief_generator import get_generator
+from .duplicates import find_duplicate
+from .auth import require_reviewer
+from .webhooks import send_accepted_webhook
 
 Base.metadata.create_all(bind=engine)
 
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
+app = FastAPI(title="Internal Request Intake & Triage Tool")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,28 +27,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
-import json
-from .brief_generator import MockBriefGenerator, get_generator
+def _brief_to_dict(brief: models.Brief) -> dict:
+    return {
+        "id": brief.id,
+        "problem_summary": brief.problem_summary,
+        "likely_users": json.loads(brief.likely_users),
+        "recommended_solution_type": brief.recommended_solution_type,
+        "clarifying_questions": json.loads(brief.clarifying_questions),
+        "risks": json.loads(brief.risks),
+        "suggested_next_action": brief.suggested_next_action,
+        "model_used": brief.model_used,
+        "created_at": brief.created_at,
+    }
+
 
 def _request_to_out(req: models.Request) -> schemas.RequestOut:
-    brief_out = None
-    if req.brief:
-        b = req.brief
-        brief_out = schemas.BriefOut(
-            id=b.id,
-            created_at=b.created_at,
-            problem_summary=b.problem_summary,
-            likely_users=json.loads(b.likely_users),
-            recommended_solution_type=b.recommended_solution_type,
-            clarifying_questions=json.loads(b.clarifying_questions),
-            risks=json.loads(b.risks),
-            suggested_next_action=b.suggested_next_action,
-            model_used=b.model_used,
-        )
     return schemas.RequestOut(
         id=req.id,
         raw_text=req.raw_text,
@@ -48,16 +52,41 @@ def _request_to_out(req: models.Request) -> schemas.RequestOut:
         owner=req.owner,
         priority=req.priority,
         notes=req.notes,
-        brief=brief_out,
+        duplicate_of=req.duplicate_of,
+        brief=_brief_to_dict(req.brief) if req.brief else None,
     )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
 @app.post("/requests", response_model=schemas.RequestOut, status_code=201)
 def create_request(payload: schemas.RequestCreate, db: Session = Depends(get_db)):
-    req = models.Request(raw_text=payload.raw_text, submitted_by=payload.submitted_by)
+    """Submit a messy request; immediately generate a structured brief for it."""
+    recent = (
+        db.query(models.Request)
+        .order_by(models.Request.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    duplicate_id = find_duplicate(payload.raw_text, recent)
+
+    req = models.Request(
+        raw_text=payload.raw_text,
+        submitted_by=payload.submitted_by,
+        duplicate_of=duplicate_id,
+    )
     db.add(req)
     db.flush()
 
-    brief_data = get_generator().generate(payload.raw_text)
+    try:
+        brief_data = get_generator().generate(payload.raw_text)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"Brief generation failed: {exc}")
+
     brief = models.Brief(
         request_id=req.id,
         problem_summary=brief_data.problem_summary,
@@ -73,18 +102,42 @@ def create_request(payload: schemas.RequestCreate, db: Session = Depends(get_db)
     db.refresh(req)
     return _request_to_out(req)
 
-@app.get("/requests", response_model=list[schemas.RequestOut])
-def list_requests(db: Session = Depends(get_db)):
-    return [_request_to_out(r) for r in db.query(models.Request).all()]
 
-@app.get("/requests", response_model=list[schemas.RequestOut])
-def list_requests(db: Session = Depends(get_db)):
-    return db.query(models.Request).all()
+@app.get("/requests", response_model=List[schemas.RequestOut])
+def list_requests(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_reviewer),
+):
+    query = db.query(models.Request)
+    if status:
+        query = query.filter(models.Request.status == status)
+    if priority:
+        query = query.filter(models.Request.priority == priority)
+    reqs = query.order_by(models.Request.created_at.desc()).all()
+    return [_request_to_out(r) for r in reqs]
 
-from .schemas import TriageUpdate, AuditEntryOut
+
+@app.get("/requests/{request_id}", response_model=schemas.RequestOut)
+def get_request(
+    request_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_reviewer),
+):
+    req = db.query(models.Request).filter(models.Request.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return _request_to_out(req)
+
 
 @app.patch("/requests/{request_id}", response_model=schemas.RequestOut)
-def update_triage(request_id: str, payload: schemas.TriageUpdate, db: Session = Depends(get_db)):
+def update_triage(
+    request_id: str,
+    payload: schemas.TriageUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_reviewer),
+):
     req = db.query(models.Request).filter(models.Request.id == request_id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -92,6 +145,10 @@ def update_triage(request_id: str, payload: schemas.TriageUpdate, db: Session = 
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
+
+    became_accepted = (
+        updates.get("status") == "accepted" and req.status != "accepted"
+    )
 
     for field, new_value in updates.items():
         old_value = getattr(req, field)
@@ -106,20 +163,49 @@ def update_triage(request_id: str, payload: schemas.TriageUpdate, db: Session = 
 
     db.commit()
     db.refresh(req)
+
+    if became_accepted:
+        send_accepted_webhook({
+            "request_id": req.id,
+            "raw_text": req.raw_text,
+            "owner": req.owner,
+            "priority": req.priority,
+        })
+
     return _request_to_out(req)
 
 
-@app.get("/requests/{request_id}/audit", response_model=list[schemas.AuditEntryOut])
-def get_audit_log(request_id: str, db: Session = Depends(get_db)):
+@app.get("/requests/{request_id}/audit", response_model=List[schemas.AuditEntryOut])
+def get_audit_log(
+    request_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_reviewer),
+):
     req = db.query(models.Request).filter(models.Request.id == request_id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     return db.query(models.AuditEntry).filter(models.AuditEntry.request_id == request_id).all()
 
-@app.get("/requests/{request_id}", response_model=schemas.RequestOut)
-def get_request(request_id: str, db: Session = Depends(get_db)):
-    req = db.query(models.Request).filter(models.Request.id == request_id).first()
-    if not req:
-        raise HTTPException(status_code=404, detail="Request not found")
-    return _request_to_out(req)
 
+@app.get("/requests/export/csv")
+def export_csv(db: Session = Depends(get_db)):
+    """CSV export left open (not reviewer-gated) since the frontend serves
+    it as a plain <a href> link, which can't attach a custom auth header."""
+    import csv
+    import io
+
+    reqs = db.query(models.Request).order_by(models.Request.created_at.desc()).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "created_at", "status", "priority", "owner", "duplicate_of", "raw_text"])
+    for r in reqs:
+        writer.writerow([
+            r.id, r.created_at, r.status, r.priority, r.owner or "",
+            r.duplicate_of or "", r.raw_text.replace("\n", " "),
+        ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=triage_queue.csv"},
+    )

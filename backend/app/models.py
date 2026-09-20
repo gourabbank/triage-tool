@@ -20,6 +20,7 @@ class Request(Base):
     owner = Column(String, nullable=True)
     priority = Column(String, default="medium", nullable=False)
     notes = Column(Text, nullable=True)
+    duplicate_of = Column(String, ForeignKey("requests.id"), nullable=True)
     
 from datetime import datetime  # add this import if not already there
 
