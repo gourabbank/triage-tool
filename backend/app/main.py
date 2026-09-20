@@ -22,7 +22,7 @@ def health():
     return {"status": "ok"}
 
 import json
-from .brief_generator import generate_mock_brief
+from .brief_generator import MockBriefGenerator, get_generator
 
 def _request_to_out(req: models.Request) -> schemas.RequestOut:
     brief_out = None
@@ -57,7 +57,7 @@ def create_request(payload: schemas.RequestCreate, db: Session = Depends(get_db)
     db.add(req)
     db.flush()
 
-    brief_data = generate_mock_brief(payload.raw_text)
+    brief_data = get_generator().generate(payload.raw_text)
     brief = models.Brief(
         request_id=req.id,
         problem_summary=brief_data.problem_summary,
