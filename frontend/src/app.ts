@@ -1,4 +1,5 @@
 const API_BASE = "http://localhost:8000";
+const TOKEN_KEY = "reviewerToken";
 
 interface Brief {
   problem_summary: string;
@@ -19,6 +20,7 @@ interface TriageRequest {
   owner: string | null;
   priority: string;
   notes: string | null;
+  duplicate_of: string | null;
   brief: Brief | null;
 }
 
@@ -32,11 +34,20 @@ const app = requireEl<HTMLElement>("app");
 const navSubmit = requireEl<HTMLButtonElement>("nav-submit");
 const navQueue = requireEl<HTMLButtonElement>("nav-queue");
 
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+function setToken(t: string): void {
+  t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
+}
+
+async function api<T>(path: string, options: RequestInit = {}, needsAuth = false): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (needsAuth) {
+    const t = getToken();
+    if (t) headers["X-Reviewer-Token"] = t;
+  }
+  const res = await fetch(`${API_BASE}${path}`, { headers, ...options });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
   return res.json();
 }
@@ -65,7 +76,11 @@ function renderSubmitView(): void {
       body: JSON.stringify({ raw_text: text }),
     });
     const b = req.brief!;
+    const dupBanner = req.duplicate_of
+      ? `<div class="dup-banner">⚠ Looks similar to an existing request (${req.duplicate_of}) — check the queue.</div>`
+      : "";
     requireEl<HTMLElement>("result").innerHTML = `
+      ${dupBanner}
       <div class="card">
         <h3>Brief</h3>
         <p><b>Summary:</b> ${b.problem_summary}</p>
@@ -85,26 +100,55 @@ function renderSubmitView(): void {
 // ---------- Queue ----------
 async function renderQueueView(): Promise<void> {
   setActiveNav("queue");
-  const requests = await api<TriageRequest[]>("/requests");
   app.innerHTML = `
     <div class="card">
-      <h2>Triage Queue (${requests.length})</h2>
-      ${requests.map(r => `
-        <div class="queue-row" data-id="${r.id}">
-          <b>${r.status}</b> — ${r.raw_text.slice(0, 60)}
-          <span style="float:right">${r.priority}</span>
-        </div>
-      `).join("")}
+      <label>Reviewer token (only needed if backend has REVIEWER_TOKEN set)</label>
+      <div class="token-row">
+        <input id="token-input" type="password" value="${getToken()}">
+        <button id="save-token-btn">Save</button>
+      </div>
     </div>
+    <div id="queue-body">Loading…</div>
   `;
-  app.querySelectorAll<HTMLElement>(".queue-row").forEach(row => {
-    row.addEventListener("click", () => renderDetailView(row.dataset.id!));
+  requireEl<HTMLButtonElement>("save-token-btn").addEventListener("click", () => {
+    setToken(requireEl<HTMLInputElement>("token-input").value.trim());
+    loadQueue();
   });
+  await loadQueue();
+}
+
+async function loadQueue(): Promise<void> {
+  const body = requireEl<HTMLElement>("queue-body");
+  try {
+    const requests = await api<TriageRequest[]>("/requests", {}, true);
+    body.innerHTML = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h2 style="margin:0;">Triage Queue (${requests.length})</h2>
+          <a href="${API_BASE}/requests/export/csv">Export CSV</a>
+        </div>
+        ${requests.map(r => `
+          <div class="queue-row" data-id="${r.id}">
+            <div>
+              <span class="status-badge">${r.status}</span> — ${r.raw_text.slice(0, 60)}
+              ${r.duplicate_of ? '<span class="dup-tag">possible dup</span>' : ""}
+            </div>
+            <span class="pill pill-${r.priority}">${r.priority}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    body.querySelectorAll<HTMLElement>(".queue-row").forEach(row => {
+      row.addEventListener("click", () => renderDetailView(row.dataset.id!));
+    });
+  } catch (err) {
+    body.innerHTML = `<div class="card">Failed to load queue: ${(err as Error).message}</div>`;
+  }
 }
 
 // ---------- Detail ----------
 async function renderDetailView(id: string): Promise<void> {
-  const req = await api<TriageRequest>(`/requests/${id}`);
+  const req = await api<TriageRequest>(`/requests/${id}`, {}, true);
   const b = req.brief;
   app.innerHTML = `
     <button class="back" id="back-btn">&larr; Back to queue</button>
@@ -152,13 +196,13 @@ async function saveTriage(id: string): Promise<void> {
     owner: requireEl<HTMLInputElement>("f-owner").value || null,
     notes: requireEl<HTMLTextAreaElement>("f-notes").value || null,
   };
-  await api(`/requests/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  await api(`/requests/${id}`, { method: "PATCH", body: JSON.stringify(payload) }, true);
   loadAudit(id);
   alert("Saved.");
 }
 
 async function loadAudit(id: string): Promise<void> {
-  const entries = await api<any[]>(`/requests/${id}/audit`);
+  const entries = await api<any[]>(`/requests/${id}/audit`, {}, true);
   requireEl<HTMLElement>("audit").innerHTML = entries.length
     ? entries.map(e => `<div>${e.field}: ${e.old_value} → ${e.new_value}</div>`).join("")
     : "No changes yet.";

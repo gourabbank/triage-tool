@@ -7,6 +7,15 @@ services:
       - triage-data:/app/data
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - REVIEWER_TOKEN=${REVIEWER_TOKEN:-}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5500:80"
+    depends_on:
+      - backend
 
 volumes:
   triage-data:
