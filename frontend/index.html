@@ -1,19 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>Triage Tool</title>
+<meta charset="UTF-8">
+<title>Triage Tool</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 16px; }
+  nav button { padding: 8px 16px; margin-right: 8px; cursor: pointer; }
+  nav button.active { background: #2f5df5; color: #fff; border: none; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  textarea, input, select { width: 100%; padding: 8px; margin: 4px 0 12px; box-sizing: border-box; }
+  button.primary { background: #2f5df5; color: #fff; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; }
+  .queue-row { padding: 10px 0; border-bottom: 1px solid #eee; cursor: pointer; }
+  .queue-row:hover { background: #fafafa; }
+  .back { background: none; border: none; color: #2f5df5; cursor: pointer; margin-bottom: 12px; }
+</style>
 </head>
 <body>
-  <h1>Submit a Request</h1>
-  <textarea id="raw_text" rows="4" cols="50" placeholder="Describe the request..."></textarea><br>
-  <button id="submit-btn">Generate Brief</button>
-  <div id="result"></div>
-
-  <h1>Queue</h1>
-  <button id="load-queue-btn">Load Queue</button>
-  <div id="queue"></div>
-
-  <script type="module" src="./dist/app.js"></script>
+<nav>
+  <button id="nav-submit" class="active">Submit</button>
+  <button id="nav-queue">Queue</button>
+</nav>
+<div id="app"></div>
+<script type="module" src="./dist/app.js"></script>
 </body>
 </html>
