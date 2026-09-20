@@ -106,3 +106,10 @@ def get_audit_log(request_id: str, db: Session = Depends(get_db)):
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     return db.query(models.AuditEntry).filter(models.AuditEntry.request_id == request_id).all()
+
+@app.get("/requests/{request_id}", response_model=schemas.RequestOut)
+def get_request(request_id: str, db: Session = Depends(get_db)):
+    req = db.query(models.Request).filter(models.Request.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return _request_to_out(req)
