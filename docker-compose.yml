@@ -3,3 +3,8 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    volumes:
+      - triage-data:/app/data
+
+volumes:
+  triage-data:
