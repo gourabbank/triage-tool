@@ -6,7 +6,16 @@ from fastapi import FastAPI, Depends, HTTPException
 
 Base.metadata.create_all(bind=engine)
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 def health():
@@ -113,3 +122,4 @@ def get_request(request_id: str, db: Session = Depends(get_db)):
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     return _request_to_out(req)
+
